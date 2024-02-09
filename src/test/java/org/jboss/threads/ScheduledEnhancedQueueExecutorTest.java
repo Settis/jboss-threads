@@ -2,12 +2,9 @@ package org.jboss.threads;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.lang.ref.WeakReference;
+import java.util.Objects;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -29,6 +26,41 @@ public class ScheduledEnhancedQueueExecutorTest {
         } finally {
             eqe.shutdownNow();
         }
+    }
+
+    @Test
+    void testGCOnCancelFoSingleThreadScheduledExecutor() throws Exception {
+        testGCOnCancel(Executors.newSingleThreadScheduledExecutor());
+    }
+
+    @Test
+    void testGCOnCancelForScheduledEnhancedQueueExecutor() throws Exception {
+        testGCOnCancel(new EnhancedQueueExecutor.Builder().build());
+    }
+
+    private void testGCOnCancel(ScheduledExecutorService service) throws Exception {
+        try {
+            WeakReference<Object> weakObject = new WeakReference<>(new Object());
+            ScheduledFuture<?> future = service.schedule(createCallable(weakObject), 1000, TimeUnit.DAYS);
+            Thread.sleep(400); // a few ms to let things percolate
+            assertFalse(future.isCancelled());
+            assertNotNull(weakObject.get());
+            // this should succeed since the task isn't submitted yet
+            assertTrue(future.cancel(false));
+            assertTrue(future.isCancelled());
+            System.gc();
+            Thread.sleep(400);
+            assertNull(weakObject.get());
+            service.shutdown();
+            assertTrue(service.awaitTermination(5, TimeUnit.SECONDS), "Timely shutdown");
+        } finally {
+            service.shutdownNow();
+        }
+    }
+
+    private Callable<Void> createCallable(WeakReference<Object> weakObject) {
+        Object it = Objects.requireNonNull(weakObject.get());
+        return () -> fail("Should never run with: " + it);
     }
 
     @Test
